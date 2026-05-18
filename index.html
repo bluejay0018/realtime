@@ -403,6 +403,108 @@
   }
 
   // ============================================================
+  // STATUS
+  // ============================================================
+  function setStatus(mode, text) {
+    state.statusMode = mode;
+    const el = document.getElementById('status');
+    el.classList.remove('paused', 'error');
+    if (mode === 'paused') el.classList.add('paused');
+    if (mode === 'error')  el.classList.add('error');
+    document.getElementById('status-text').textContent = text;
+  }
+  function setLastCheck(date) {
+    document.getElementById('last-check').textContent = date
+      ? 'Last check: ' + date.toLocaleTimeString()
+      : '';
+  }
+  function setAuthError(msg) {
+    const el = document.getElementById('auth-status');
+    if (!msg) { el.classList.remove('show', 'error'); el.textContent = ''; return; }
+    el.classList.add('show', 'error');
+    el.textContent = msg;
+  }
+
+  // ============================================================
+  // POLLING
+  // ============================================================
+  async function tick() {
+    try {
+      const data = await fetchSavvy('/core/transactions/subscribed?limit=20');
+      ingestPosts(data, false);
+      setStatus('live', 'Live');
+      setLastCheck(new Date());
+    } catch (err) {
+      if (err.code === 'TOKEN_EXPIRED') {
+        stop();
+        setStatus('error', 'Token expired');
+        setAuthError('Token expired — paste a fresh idToken into the JWT field.');
+        return;
+      }
+      setStatus('error', 'Error: ' + err.message);
+    }
+  }
+
+  async function start() {
+    setAuthError('');
+    if (!credsReady()) {
+      setAuthError('Fill in Worker URL, JWT, and Anthropic API key first.');
+      return;
+    }
+    const limit = Number(document.getElementById('initial-count').value) || 20;
+    state.pollMs = Number(document.getElementById('poll-interval').value) || 30000;
+
+    setStatus('live', 'Loading...');
+    try {
+      const portfolios = await fetchSavvy('/core/portfolios/subscribed');
+      ingestPortfolios(portfolios);
+
+      const posts = await fetchSavvy('/core/transactions/subscribed?limit=' + limit);
+      ingestPosts(posts, true);
+      setStatus('live', 'Live');
+      setLastCheck(new Date());
+    } catch (err) {
+      if (err.code === 'TOKEN_EXPIRED') {
+        setStatus('error', 'Token expired');
+        setAuthError('Token expired — paste a fresh idToken into the JWT field.');
+        return;
+      }
+      setStatus('error', 'Error: ' + err.message);
+      return;
+    }
+
+    if (state.pollHandle) clearInterval(state.pollHandle);
+    state.pollHandle = setInterval(tick, state.pollMs);
+    document.getElementById('start-btn').disabled = true;
+    document.getElementById('pause-btn').disabled = false;
+  }
+
+  function stop() {
+    if (state.pollHandle) { clearInterval(state.pollHandle); state.pollHandle = null; }
+    setStatus('paused', 'Paused');
+    document.getElementById('start-btn').disabled = false;
+    document.getElementById('pause-btn').disabled = true;
+  }
+
+  function clearAll() {
+    stop();
+    state.posts = [];
+    state.seenIds.clear();
+    state.claudeCache.clear();
+    state.newCount = 0;
+    renderFeed();
+    updateCounts();
+    setStatus('idle', 'Idle');
+    setLastCheck(null);
+  }
+
+  // Placeholders implemented in Task 9 + Task 10:
+  function ingestPortfolios(_list) {}
+  function ingestPosts(_list, _initial) {}
+  function renderFeed() {}
+  function updateCounts() {}
+
+  // ============================================================
   // INIT
   // ============================================================
   function init() {
@@ -423,6 +525,11 @@
     document.getElementById('anthropic-key').addEventListener('change', e => saveSettings({ anthropicKey: e.target.value.trim() }));
     document.getElementById('poll-interval').addEventListener('change', e => saveSettings({ pollMs: Number(e.target.value) }));
     document.getElementById('initial-count').addEventListener('change', e => saveSettings({ initialCount: Number(e.target.value) }));
+
+    document.getElementById('start-btn').addEventListener('click', start);
+    document.getElementById('pause-btn').addEventListener('click', stop);
+    document.getElementById('clear-btn').addEventListener('click', clearAll);
+    setStatus('idle', 'Idle');
   }
 
   document.addEventListener('DOMContentLoaded', init);
