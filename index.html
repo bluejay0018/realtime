@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Savvy Trader Feed</title>
+  <title>My Today's Feed</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -80,7 +80,8 @@
     }
     .theme-toggle:hover { background: var(--bg-feed); }
 
-    .app { display: grid; grid-template-columns: 290px 1fr; height: calc(100vh - 52px); }
+    .app { display: grid; grid-template-columns: 290px 1fr; height: calc(100vh - 52px); transition: grid-template-columns 0.2s ease; }
+    .app.panel-open { grid-template-columns: 290px 1fr 440px; }
 
     .sidebar {
       background: var(--bg-sidebar);
@@ -209,6 +210,61 @@
     .auth-status { font-size: 12px; padding: 8px; border-radius: 6px; margin-top: 8px; display: none; }
     .auth-status.show { display: block; }
     .auth-status.error { background: var(--sell-bg); color: var(--sell); }
+
+    /* Right-side Claude panel */
+    .claude-panel {
+      background: var(--bg-sidebar);
+      border-left: 1px solid var(--border);
+      display: none;
+      flex-direction: column;
+      overflow: hidden;
+    }
+    .app.panel-open .claude-panel { display: flex; }
+
+    .claude-panel-header {
+      padding: 10px 14px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg-app);
+      display: flex; align-items: center; gap: 10px;
+      min-height: 48px;
+    }
+    .claude-panel-title { flex: 1; font-size: 13px; font-weight: 600; color: var(--text-primary); display: flex; align-items: center; gap: 8px; min-width: 0; }
+    .claude-panel-title .sparkle { color: var(--accent); }
+    .claude-panel-subtitle { font-size: 11px; color: var(--text-muted); font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .claude-panel-close {
+      background: none; border: 1px solid var(--border); border-radius: 6px;
+      width: 28px; height: 28px; cursor: pointer; font-size: 13px;
+      color: var(--text-secondary);
+      display: flex; align-items: center; justify-content: center; flex-shrink: 0;
+    }
+    .claude-panel-close:hover { background: var(--bg-feed); color: var(--text-primary); }
+
+    .claude-panel-body { flex: 1; overflow-y: auto; padding: 14px; display: flex; flex-direction: column; gap: 12px; }
+
+    .post-context {
+      background: var(--bg-app); border: 1px solid var(--border); border-radius: 8px;
+      padding: 10px 12px; font-size: 12px; color: var(--text-secondary); line-height: 1.55;
+    }
+    .post-context .ctx-label { font-size: 9px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--text-muted); margin-bottom: 5px; }
+    .post-context .ctx-body { color: var(--text-primary); max-height: 120px; overflow-y: auto; font-size: 12px; }
+
+    .claude-panel .chat { margin: 0; border: 1px solid var(--border); }
+    .claude-panel-input-row {
+      padding: 10px 12px; background: var(--bg-app);
+      border-top: 1px solid var(--border); display: flex; gap: 6px;
+    }
+    .claude-panel-input-row input {
+      flex: 1; background: var(--bg-input); border: 1px solid var(--border-strong);
+      border-radius: 6px; color: var(--text-primary); padding: 8px 10px;
+      font-size: 13px; font-family: inherit;
+    }
+    .claude-panel-input-row input:focus { outline: none; border-color: var(--accent); }
+    .claude-panel-input-row button {
+      background: var(--accent); color: white; border: none; border-radius: 6px;
+      padding: 8px 16px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
+    }
+    .claude-panel-input-row button:hover { filter: brightness(1.08); }
+    .claude-panel-input-row button:disabled { opacity: 0.5; cursor: not-allowed; }
   </style>
 </head>
 <body data-theme="light">
@@ -314,6 +370,24 @@
         <div class="empty">Fill in credentials and click Start to load the feed.</div>
       </div>
     </section>
+
+    <aside class="claude-panel" id="claude-panel">
+      <div class="claude-panel-header">
+        <div class="claude-panel-title">
+          <span class="sparkle">✦</span>
+          <div style="flex:1; min-width:0">
+            <div>Claude Analysis</div>
+            <div class="claude-panel-subtitle" id="panel-subtitle"></div>
+          </div>
+        </div>
+        <button class="claude-panel-close" id="panel-close" title="Close (Esc)">✕</button>
+      </div>
+      <div class="claude-panel-body" id="panel-body"></div>
+      <div class="claude-panel-input-row" id="panel-input-row" style="display:none">
+        <input type="text" id="panel-input" placeholder="Ask a follow-up..." />
+        <button id="panel-send">Ask</button>
+      </div>
+    </aside>
   </main>
 
   <script>
@@ -361,6 +435,7 @@
     selectedPortfolios: new Set(),
     claudeCache: new Map(),
     quoteCache: new Map(),  // symbol -> { price, fetchedAt }
+    activePanelPostId: null,
     pollHandle: null,
     pollMs: 30000,
     initialCount: 20,
@@ -834,7 +909,6 @@
         <div class="card-actions">
           <button class="analyze-btn" data-analyze="${post.id}">✦ Ask Claude</button>
         </div>
-        <div class="analysis-container" data-analysis="${post.id}"></div>
       </div>
     `;
   }
@@ -851,15 +925,13 @@
       return;
     }
     feed.innerHTML = posts.map(renderCard).join('');
-    // Re-attach cached Claude conversations
-    state.claudeCache.forEach((conversation, id) => {
-      const container = feed.querySelector(`[data-analysis="${id}"]`);
-      if (container) {
-        renderChat(container, id, conversation);
-        const btn = feed.querySelector(`[data-analyze="${id}"]`);
-        if (btn) btn.style.display = 'none';
-      }
+    // Update each analyze button label to reflect cache state
+    state.claudeCache.forEach((_, id) => {
+      const btn = feed.querySelector(`[data-analyze="${id}"]`);
+      if (btn) btn.textContent = '✦ View analysis';
     });
+    // If the panel is open for a post that's still in view, re-render it
+    if (state.activePanelPostId != null) renderPanelForActive();
     // Fill in live quotes (async, doesn't block render)
     enrichQuotes();
   }
@@ -988,26 +1060,73 @@
   }
 
   // ============================================================
-  // CLAUDE CHAT
+  // CLAUDE PANEL (right-side, contextual per post)
   // ============================================================
-  async function handleAnalyzeClick(postId) {
-    const post = state.posts.find(p => p.id === postId);
-    if (!post) return;
-    const container = document.querySelector(`[data-analysis="${postId}"]`);
-    const btn       = document.querySelector(`[data-analyze="${postId}"]`);
+  function openPanel(postId) {
+    state.activePanelPostId = postId;
+    document.querySelector('.app').classList.add('panel-open');
+    renderPanelForActive();
+  }
+  function closePanel() {
+    state.activePanelPostId = null;
+    document.querySelector('.app').classList.remove('panel-open');
+    document.getElementById('panel-body').innerHTML = '';
+    document.getElementById('panel-input-row').style.display = 'none';
+    document.getElementById('panel-subtitle').textContent = '';
+  }
 
-    // Already analyzed — just render
-    if (state.claudeCache.has(postId)) {
-      btn.style.display = 'none';
-      renderChat(container, postId, state.claudeCache.get(postId));
-      focusChatInput(postId);
+  function buildContextHeader(post) {
+    const portfolio = post.portfolio?.name || ('#' + (post.portfolioId ?? '?'));
+    const time = relativeTime(post.orderDate);
+    const sym = post.symbol ? ` · ${post.symbol}` : '';
+    return `${portfolio}${sym} · ${time}`;
+  }
+  function buildContextCard(post) {
+    const snippet = post.comment || '(No body text)';
+    return `
+      <div class="post-context">
+        <div class="ctx-label">Post context</div>
+        <div class="ctx-body">${escapeHtml(snippet)}</div>
+      </div>
+    `;
+  }
+
+  function renderPanelForActive() {
+    const postId = state.activePanelPostId;
+    if (postId == null) return;
+    const post = state.posts.find(p => p.id === postId);
+    if (!post) { closePanel(); return; }
+
+    document.getElementById('panel-subtitle').textContent = buildContextHeader(post);
+    const body = document.getElementById('panel-body');
+    const inputRow = document.getElementById('panel-input-row');
+
+    const conversation = state.claudeCache.get(postId);
+    if (!conversation) {
+      // Not analyzed yet — kick off the initial analysis
+      body.innerHTML = buildContextCard(post)
+        + `<div class="chat"><div class="chat-msg assistant thinking"><div class="chat-role">✦ Claude</div><div class="chat-text">Analyzing post…</div></div></div>`;
+      inputRow.style.display = 'none';
+      startInitialAnalysis(postId);
       return;
     }
 
-    btn.disabled = true;
-    btn.textContent = '✦ Thinking...';
-    container.innerHTML = `<div class="chat"><div class="chat-msg assistant thinking"><div class="chat-role">✦ Claude</div><div class="chat-text">Analyzing post…</div></div></div>`;
+    // Already have a conversation — render the thread + input
+    body.innerHTML = buildContextCard(post)
+      + `<div class="chat"><div class="chat-thread">${renderChatMessages(conversation)}</div></div>`;
+    inputRow.style.display = 'flex';
+    // Reset input state in case prior view left it disabled
+    document.getElementById('panel-input').disabled = false;
+    document.getElementById('panel-send').disabled = false;
+    document.getElementById('panel-send').textContent = 'Ask';
+    document.getElementById('panel-input').focus();
+    // Scroll to bottom so the most recent reply is visible
+    body.scrollTop = body.scrollHeight;
+  }
 
+  async function startInitialAnalysis(postId) {
+    const post = state.posts.find(p => p.id === postId);
+    if (!post) return;
     const postText = buildPostText(post);
     const conversation = [{ role: 'user', content: postText }];
 
@@ -1016,73 +1135,87 @@
       conversation.push({ role: 'assistant', content: analysis });
       state.claudeCache.set(postId, conversation);
       persistClaude();
-      btn.style.display = 'none';
-      renderChat(container, postId, conversation);
-      focusChatInput(postId);
+      // Update the analyze button label on the card
+      const btn = document.querySelector(`[data-analyze="${postId}"]`);
+      if (btn) btn.textContent = '✦ View analysis';
+      // If user is still viewing this post in the panel, refresh it
+      if (state.activePanelPostId === postId) renderPanelForActive();
     } catch (err) {
-      renderChatError(container, 'Claude error: ' + err.message + ' — click Ask Claude to retry.');
-      btn.disabled = false;
-      btn.textContent = '✦ Ask Claude';
+      if (state.activePanelPostId !== postId) return;
+      const body = document.getElementById('panel-body');
+      body.innerHTML = buildContextCard(post)
+        + `<div class="chat"><div class="chat-msg error">
+          <div class="chat-role">Error</div>
+          <div class="chat-text">${escapeHtml('Claude error: ' + err.message)}</div>
+        </div></div>
+        <button class="btn" id="panel-retry" style="margin-top:10px">Retry</button>`;
+      document.getElementById('panel-retry').addEventListener('click', () => renderPanelForActive());
     }
   }
 
-  async function handleFollowupSubmit(postId) {
-    const input = document.querySelector(`[data-chat-input="${postId}"]`);
-    const sendBtn = document.querySelector(`[data-chat-send="${postId}"]`);
-    if (!input) return;
-    const question = input.value.trim();
-    if (!question) return;
-
-    const container = document.querySelector(`[data-analysis="${postId}"]`);
+  async function handleFollowupSubmit() {
+    const postId = state.activePanelPostId;
+    if (postId == null) return;
     const conversation = state.claudeCache.get(postId);
     if (!conversation) return;
 
-    conversation.push({ role: 'user', content: question });
-    renderChat(container, postId, conversation);
-    // re-grab input after re-render
-    const newInput = document.querySelector(`[data-chat-input="${postId}"]`);
-    const newSendBtn = document.querySelector(`[data-chat-send="${postId}"]`);
-    if (newInput) { newInput.value = ''; newInput.disabled = true; }
-    if (newSendBtn) { newSendBtn.disabled = true; newSendBtn.textContent = '...'; }
+    const input = document.getElementById('panel-input');
+    const sendBtn = document.getElementById('panel-send');
+    const body = document.getElementById('panel-body');
+    const question = input.value.trim();
+    if (!question) return;
 
-    // Show "thinking" placeholder in the thread
-    const thread = container.querySelector('.chat-thread');
-    if (thread) {
-      thread.insertAdjacentHTML('beforeend',
-        `<div class="chat-msg assistant thinking" data-thinking>
-          <div class="chat-role">✦ Claude</div>
-          <div class="chat-text">Thinking…</div>
-        </div>`);
-    }
+    conversation.push({ role: 'user', content: question });
+    input.value = '';
+    input.disabled = true;
+    sendBtn.disabled = true;
+    sendBtn.textContent = '...';
+
+    // Re-render with the new user message + thinking placeholder
+    const post = state.posts.find(p => p.id === postId);
+    body.innerHTML = buildContextCard(post)
+      + `<div class="chat">
+          <div class="chat-thread">${renderChatMessages(conversation)}
+            <div class="chat-msg assistant thinking">
+              <div class="chat-role">✦ Claude</div>
+              <div class="chat-text">Thinking…</div>
+            </div>
+          </div>
+        </div>`;
+    body.scrollTop = body.scrollHeight;
 
     try {
       const reply = await fetchClaude({ messages: conversation });
       conversation.push({ role: 'assistant', content: reply });
       persistClaude();
-      renderChat(container, postId, conversation);
-      focusChatInput(postId);
+      if (state.activePanelPostId === postId) renderPanelForActive();
     } catch (err) {
       // Roll back the unanswered user message so retry works
       conversation.pop();
       persistClaude();
-      renderChat(container, postId, conversation);
-      const errBox = container.querySelector('.chat-thread');
-      if (errBox) {
-        errBox.insertAdjacentHTML('beforeend',
-          `<div class="chat-msg error">
-            <div class="chat-role">Error</div>
-            <div class="chat-text">${escapeHtml(err.message)} — try again.</div>
-          </div>`);
+      if (state.activePanelPostId !== postId) return;
+      body.innerHTML = buildContextCard(post)
+        + `<div class="chat">
+            <div class="chat-thread">${renderChatMessages(conversation)}
+              <div class="chat-msg error">
+                <div class="chat-role">Error</div>
+                <div class="chat-text">${escapeHtml(err.message)} — try again.</div>
+              </div>
+            </div>
+          </div>`;
+      input.value = question;
+    } finally {
+      if (state.activePanelPostId === postId) {
+        input.disabled = false;
+        sendBtn.disabled = false;
+        sendBtn.textContent = 'Ask';
+        input.focus();
       }
-      const retryInput = document.querySelector(`[data-chat-input="${postId}"]`);
-      if (retryInput) retryInput.value = question;
-      focusChatInput(postId);
     }
   }
 
-  function focusChatInput(postId) {
-    const el = document.querySelector(`[data-chat-input="${postId}"]`);
-    if (el) el.focus();
+  function handleAnalyzeClick(postId) {
+    openPanel(postId);
   }
 
   // ============================================================
@@ -1131,20 +1264,20 @@
       const analyzeBtn = e.target.closest('[data-analyze]');
       if (analyzeBtn) {
         handleAnalyzeClick(Number(analyzeBtn.dataset.analyze));
-        return;
-      }
-      const sendBtn = e.target.closest('[data-chat-send]');
-      if (sendBtn) {
-        handleFollowupSubmit(Number(sendBtn.dataset.chatSend));
       }
     });
 
-    document.getElementById('feed').addEventListener('keydown', e => {
-      if (e.key !== 'Enter') return;
-      const input = e.target.closest('[data-chat-input]');
-      if (!input) return;
-      e.preventDefault();
-      handleFollowupSubmit(Number(input.dataset.chatInput));
+    // Claude side-panel controls
+    document.getElementById('panel-close').addEventListener('click', closePanel);
+    document.getElementById('panel-send').addEventListener('click', handleFollowupSubmit);
+    document.getElementById('panel-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') {
+        e.preventDefault();
+        handleFollowupSubmit();
+      }
+    });
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Escape' && state.activePanelPostId != null) closePanel();
     });
 
     // Render anything we restored from localStorage
