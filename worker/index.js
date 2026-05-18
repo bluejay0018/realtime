@@ -41,7 +41,16 @@ async function proxySavvy(request, url) {
   }
 }
 
-const CLAUDE_PROMPT = `You are analyzing a post from a stock portfolio manager. The post may be a trade (buy/sell) or a written commentary/deep-dive. In 3-4 sentences max: (1) state what action was taken or what the key thesis point is, (2) classify it as one of: New Position / Add / Trim / Full Exit / Thesis Update / Market Commentary, (3) flag any notable risk, contrarian signal, or urgency worth knowing. Be direct and concise — no filler.`;
+const CLAUDE_PROMPT = `You are an investment analyst helping a user interpret posts from stock portfolio managers.
+
+For the FIRST user message (which contains the post itself), respond in 3-4 sentences max:
+(1) state what action was taken or what the key thesis point is,
+(2) classify it as one of: New Position / Add / Trim / Full Exit / Thesis Update / Market Commentary,
+(3) flag any notable risk, contrarian signal, or urgency worth knowing.
+
+For any FOLLOW-UP question from the user, answer directly and concisely, drawing on the post and your investment knowledge. Use plain prose (no bullet/numbered list) unless the user asks for structure.
+
+Always be direct — no filler, no hedging, no "I am an AI" disclaimers.`;
 
 async function handleClaude(request) {
   if (request.method !== 'POST') {
@@ -53,10 +62,19 @@ async function handleClaude(request) {
   } catch {
     return corsJson({ error: 'Invalid JSON' }, 400);
   }
-  const { post, apiKey } = body || {};
-  if (!post || !apiKey) {
-    return corsJson({ error: 'Missing post or apiKey' }, 400);
+  const { post, apiKey, messages } = body || {};
+  if (!apiKey) {
+    return corsJson({ error: 'Missing apiKey' }, 400);
   }
+  if (!post && (!Array.isArray(messages) || messages.length === 0)) {
+    return corsJson({ error: 'Missing post or messages' }, 400);
+  }
+
+  // For initial analysis: send the post as a single user message.
+  // For follow-ups: caller passes the full conversation history.
+  const chatMessages = Array.isArray(messages) && messages.length > 0
+    ? messages
+    : [{ role: 'user', content: post }];
 
   try {
     const upstream = await fetch('https://api.anthropic.com/v1/messages', {
@@ -68,9 +86,9 @@ async function handleClaude(request) {
       },
       body: JSON.stringify({
         model: 'claude-sonnet-4-6',
-        max_tokens: 400,
+        max_tokens: 600,
         system: CLAUDE_PROMPT,
-        messages: [{ role: 'user', content: post }],
+        messages: chatMessages,
       }),
     });
 

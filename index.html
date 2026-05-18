@@ -158,22 +158,49 @@
     .pill.sell { background: var(--sell-bg); color: var(--sell); }
     .pill.comment { background: var(--comment-bg); color: var(--comment); }
     .trade-line { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
-    .ticker { font-weight: 700; color: var(--text-primary); }
+    .ticker { font-weight: 700; color: var(--text-primary); text-decoration: none; border-bottom: 1px dashed var(--text-muted); }
+    .ticker:hover { color: var(--accent); border-bottom-color: var(--accent); }
     .change.up { color: var(--buy); font-weight: 600; }
     .change.down { color: var(--sell); font-weight: 600; }
     .body-text { font-size: 13px; color: var(--text-primary); line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
     .post-image { margin-top: 10px; border-radius: 8px; max-width: 100%; max-height: 280px; object-fit: contain; border: 1px solid var(--border); display: block; }
-    .card-actions { margin-top: 10px; }
+    .card-actions { margin-top: 12px; }
     .analyze-btn {
-      background: var(--accent-bg); color: var(--accent); border: 1px solid var(--border);
-      border-radius: 6px; padding: 5px 12px; font-size: 11px; font-weight: 600; cursor: pointer;
-      font-family: inherit;
+      background: var(--accent); color: white; border: none;
+      border-radius: 6px; padding: 7px 14px; font-size: 12px; font-weight: 600; cursor: pointer;
+      font-family: inherit; display: inline-flex; align-items: center; gap: 6px;
+      transition: filter .15s;
     }
-    .analyze-btn:hover { filter: brightness(1.03); }
+    .analyze-btn:hover { filter: brightness(1.08); }
     .analyze-btn:disabled { opacity: 0.6; cursor: wait; }
-    .analysis { margin-top: 10px; background: var(--accent-bg); border-radius: 6px; padding: 10px 12px; font-size: 12px; color: var(--text-primary); line-height: 1.6; }
-    .analysis.error { background: var(--sell-bg); color: var(--sell); }
-    .analysis-label { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.06em; color: var(--accent); margin-bottom: 4px; }
+
+    /* Conversation thread */
+    .chat { margin-top: 12px; border: 1px solid var(--border); border-radius: 10px; background: var(--bg-app); overflow: hidden; }
+    .chat-msg { padding: 12px 14px; border-bottom: 1px solid var(--border); }
+    .chat-msg:last-of-type { border-bottom: none; }
+    .chat-msg.assistant { background: var(--bg-app); }
+    .chat-msg.user { background: var(--bg-feed); }
+    .chat-msg.error { background: var(--sell-bg); color: var(--sell); }
+    .chat-role {
+      font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em;
+      display: flex; align-items: center; gap: 6px; margin-bottom: 6px;
+    }
+    .chat-msg.assistant .chat-role { color: var(--accent); }
+    .chat-msg.user .chat-role { color: var(--text-secondary); }
+    .chat-text { font-size: 13px; color: var(--text-primary); line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+    .chat-msg.assistant.thinking .chat-text { color: var(--text-muted); font-style: italic; }
+    .chat-input-row { display: flex; gap: 6px; padding: 10px; background: var(--bg-sidebar); border-top: 1px solid var(--border); }
+    .chat-input {
+      flex: 1; background: var(--bg-input); border: 1px solid var(--border-strong); border-radius: 6px;
+      color: var(--text-primary); padding: 7px 10px; font-size: 13px; font-family: inherit;
+    }
+    .chat-input:focus { outline: none; border-color: var(--accent); }
+    .chat-send {
+      background: var(--accent); color: white; border: none; border-radius: 6px;
+      padding: 7px 14px; font-size: 12px; font-weight: 600; cursor: pointer; font-family: inherit;
+    }
+    .chat-send:hover { filter: brightness(1.08); }
+    .chat-send:disabled { opacity: 0.5; cursor: not-allowed; }
 
     .auth-status { font-size: 12px; padding: 8px; border-radius: 6px; margin-top: 8px; display: none; }
     .auth-status.show { display: block; }
@@ -294,7 +321,7 @@
   const SETTINGS_KEY  = 'savvy.settings.v1';
   const THEME_KEY     = 'savvy.theme';
   const POSTS_KEY     = 'savvy.posts.v1';
-  const CLAUDE_KEY    = 'savvy.claude.v1';
+  const CLAUDE_KEY    = 'savvy.claude.v2';
   const SELECTED_KEY  = 'savvy.selectedPortfolios.v1';
   const MAX_STORED_POSTS = 500;
 
@@ -472,14 +499,17 @@
     return res.json();
   }
 
-  async function fetchClaude(post) {
+  async function fetchClaude({ post, messages }) {
     const { workerUrl, anthropicKey } = getCreds();
     if (!workerUrl) throw new Error('Worker URL not set');
     if (!anthropicKey) throw new Error('Anthropic key not set');
+    const body = { apiKey: anthropicKey };
+    if (Array.isArray(messages) && messages.length > 0) body.messages = messages;
+    else body.post = post;
     const res = await fetch(workerUrl + '/claude', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ post, apiKey: anthropicKey }),
+      body: JSON.stringify(body),
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Claude error');
@@ -749,7 +779,10 @@
     let tradeLine = '';
     if (t === 'buy' || t === 'sell') {
       const bits = [];
-      if (post.symbol) bits.push(`<span class="ticker">${escapeHtml(post.symbol)}</span>`);
+      if (post.symbol) {
+        const sym = escapeHtml(post.symbol);
+        bits.push(`<a class="ticker" href="https://finance.yahoo.com/quote/${sym}" target="_blank" rel="noopener" title="Open ${sym} on Yahoo Finance">${sym}</a>`);
+      }
       if (post.quantity != null && post.pricePerShare != null)
         bits.push(`${escapeHtml(post.quantity)} shares @ $${escapeHtml(post.pricePerShare)}`);
       if (post.holdingPercentChange != null) {
@@ -798,17 +831,55 @@
       return;
     }
     feed.innerHTML = posts.map(renderCard).join('');
-    // Re-attach cached Claude results
-    state.claudeCache.forEach((analysis, id) => {
+    // Re-attach cached Claude conversations
+    state.claudeCache.forEach((conversation, id) => {
       const container = feed.querySelector(`[data-analysis="${id}"]`);
-      if (container) container.innerHTML = renderAnalysis(analysis, false);
+      if (container) {
+        renderChat(container, id, conversation);
+        const btn = feed.querySelector(`[data-analyze="${id}"]`);
+        if (btn) btn.style.display = 'none';
+      }
     });
   }
 
-  function renderAnalysis(text, isError) {
-    return `<div class="analysis ${isError ? 'error' : ''}">
-      <div class="analysis-label">${isError ? 'Error' : 'Claude analysis'}</div>
-      ${escapeHtml(text)}
+  function renderChatMessages(conversation) {
+    // conversation is an array of {role, content}. The first user message is
+    // the post payload (verbose, internal) — skip rendering it so the UI
+    // starts with Claude's initial analysis.
+    return conversation
+      .slice(1)
+      .map(m => {
+        const cls = m.role === 'user' ? 'user' : 'assistant';
+        const label = m.role === 'user' ? '? You' : '✦ Claude';
+        return `
+          <div class="chat-msg ${cls}">
+            <div class="chat-role">${label}</div>
+            <div class="chat-text">${escapeHtml(m.content)}</div>
+          </div>
+        `;
+      })
+      .join('');
+  }
+
+  function renderChat(container, postId, conversation) {
+    if (!conversation || conversation.length === 0) { container.innerHTML = ''; return; }
+    container.innerHTML = `
+      <div class="chat" data-chat="${postId}">
+        <div class="chat-thread">${renderChatMessages(conversation)}</div>
+        <div class="chat-input-row">
+          <input class="chat-input" data-chat-input="${postId}" placeholder="Ask a follow-up..." />
+          <button class="chat-send" data-chat-send="${postId}">Ask</button>
+        </div>
+      </div>
+    `;
+  }
+
+  function renderChatError(container, message) {
+    container.innerHTML = `<div class="chat">
+      <div class="chat-msg error">
+        <div class="chat-role">Error</div>
+        <div class="chat-text">${escapeHtml(message)}</div>
+      </div>
     </div>`;
   }
 
@@ -840,7 +911,7 @@
   }
 
   // ============================================================
-  // CLAUDE ANALYSIS
+  // CLAUDE CHAT
   // ============================================================
   async function handleAnalyzeClick(postId) {
     const post = state.posts.find(p => p.id === postId);
@@ -848,27 +919,93 @@
     const container = document.querySelector(`[data-analysis="${postId}"]`);
     const btn       = document.querySelector(`[data-analyze="${postId}"]`);
 
-    // Cache hit
+    // Already analyzed — just render
     if (state.claudeCache.has(postId)) {
-      container.innerHTML = renderAnalysis(state.claudeCache.get(postId), false);
+      btn.style.display = 'none';
+      renderChat(container, postId, state.claudeCache.get(postId));
+      focusChatInput(postId);
       return;
     }
 
     btn.disabled = true;
-    btn.textContent = '✦ Analyzing...';
-    container.innerHTML = '';
+    btn.textContent = '✦ Thinking...';
+    container.innerHTML = `<div class="chat"><div class="chat-msg assistant thinking"><div class="chat-role">✦ Claude</div><div class="chat-text">Analyzing post…</div></div></div>`;
+
+    const postText = buildPostText(post);
+    const conversation = [{ role: 'user', content: postText }];
 
     try {
-      const analysis = await fetchClaude(buildPostText(post));
-      state.claudeCache.set(postId, analysis);
+      const analysis = await fetchClaude({ messages: conversation });
+      conversation.push({ role: 'assistant', content: analysis });
+      state.claudeCache.set(postId, conversation);
       persistClaude();
-      container.innerHTML = renderAnalysis(analysis, false);
+      btn.style.display = 'none';
+      renderChat(container, postId, conversation);
+      focusChatInput(postId);
     } catch (err) {
-      container.innerHTML = renderAnalysis('Claude error: ' + err.message + ' — click again to retry.', true);
-    } finally {
+      renderChatError(container, 'Claude error: ' + err.message + ' — click Ask Claude to retry.');
       btn.disabled = false;
       btn.textContent = '✦ Ask Claude';
     }
+  }
+
+  async function handleFollowupSubmit(postId) {
+    const input = document.querySelector(`[data-chat-input="${postId}"]`);
+    const sendBtn = document.querySelector(`[data-chat-send="${postId}"]`);
+    if (!input) return;
+    const question = input.value.trim();
+    if (!question) return;
+
+    const container = document.querySelector(`[data-analysis="${postId}"]`);
+    const conversation = state.claudeCache.get(postId);
+    if (!conversation) return;
+
+    conversation.push({ role: 'user', content: question });
+    renderChat(container, postId, conversation);
+    // re-grab input after re-render
+    const newInput = document.querySelector(`[data-chat-input="${postId}"]`);
+    const newSendBtn = document.querySelector(`[data-chat-send="${postId}"]`);
+    if (newInput) { newInput.value = ''; newInput.disabled = true; }
+    if (newSendBtn) { newSendBtn.disabled = true; newSendBtn.textContent = '...'; }
+
+    // Show "thinking" placeholder in the thread
+    const thread = container.querySelector('.chat-thread');
+    if (thread) {
+      thread.insertAdjacentHTML('beforeend',
+        `<div class="chat-msg assistant thinking" data-thinking>
+          <div class="chat-role">✦ Claude</div>
+          <div class="chat-text">Thinking…</div>
+        </div>`);
+    }
+
+    try {
+      const reply = await fetchClaude({ messages: conversation });
+      conversation.push({ role: 'assistant', content: reply });
+      persistClaude();
+      renderChat(container, postId, conversation);
+      focusChatInput(postId);
+    } catch (err) {
+      // Roll back the unanswered user message so retry works
+      conversation.pop();
+      persistClaude();
+      renderChat(container, postId, conversation);
+      const errBox = container.querySelector('.chat-thread');
+      if (errBox) {
+        errBox.insertAdjacentHTML('beforeend',
+          `<div class="chat-msg error">
+            <div class="chat-role">Error</div>
+            <div class="chat-text">${escapeHtml(err.message)} — try again.</div>
+          </div>`);
+      }
+      const retryInput = document.querySelector(`[data-chat-input="${postId}"]`);
+      if (retryInput) retryInput.value = question;
+      focusChatInput(postId);
+    }
+  }
+
+  function focusChatInput(postId) {
+    const el = document.querySelector(`[data-chat-input="${postId}"]`);
+    if (el) el.focus();
   }
 
   // ============================================================
@@ -914,9 +1051,23 @@
     document.getElementById('feed').addEventListener('click', clearNewBadge);
 
     document.getElementById('feed').addEventListener('click', e => {
-      const btn = e.target.closest('[data-analyze]');
-      if (!btn) return;
-      handleAnalyzeClick(Number(btn.dataset.analyze));
+      const analyzeBtn = e.target.closest('[data-analyze]');
+      if (analyzeBtn) {
+        handleAnalyzeClick(Number(analyzeBtn.dataset.analyze));
+        return;
+      }
+      const sendBtn = e.target.closest('[data-chat-send]');
+      if (sendBtn) {
+        handleFollowupSubmit(Number(sendBtn.dataset.chatSend));
+      }
+    });
+
+    document.getElementById('feed').addEventListener('keydown', e => {
+      if (e.key !== 'Enter') return;
+      const input = e.target.closest('[data-chat-input]');
+      if (!input) return;
+      e.preventDefault();
+      handleFollowupSubmit(Number(input.dataset.chatInput));
     });
 
     // Render anything we restored from localStorage
