@@ -41,6 +41,50 @@ async function proxySavvy(request, url) {
   }
 }
 
+const CLAUDE_PROMPT = `You are analyzing a post from a stock portfolio manager. The post may be a trade (buy/sell) or a written commentary/deep-dive. In 3-4 sentences max: (1) state what action was taken or what the key thesis point is, (2) classify it as one of: New Position / Add / Trim / Full Exit / Thesis Update / Market Commentary, (3) flag any notable risk, contrarian signal, or urgency worth knowing. Be direct and concise — no filler.`;
+
+async function handleClaude(request) {
+  if (request.method !== 'POST') {
+    return corsJson({ error: 'Method not allowed' }, 405);
+  }
+  let body;
+  try {
+    body = await request.json();
+  } catch {
+    return corsJson({ error: 'Invalid JSON' }, 400);
+  }
+  const { post, apiKey } = body || {};
+  if (!post || !apiKey) {
+    return corsJson({ error: 'Missing post or apiKey' }, 400);
+  }
+
+  try {
+    const upstream = await fetch('https://api.anthropic.com/v1/messages', {
+      method: 'POST',
+      headers: {
+        'x-api-key': apiKey,
+        'anthropic-version': '2023-06-01',
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'claude-sonnet-4-6',
+        max_tokens: 400,
+        system: CLAUDE_PROMPT,
+        messages: [{ role: 'user', content: post }],
+      }),
+    });
+
+    const data = await upstream.json();
+    if (!upstream.ok) {
+      return corsJson({ error: data.error?.message || 'Anthropic API error', status: upstream.status }, upstream.status);
+    }
+    const analysis = data.content?.[0]?.text ?? '';
+    return corsJson({ analysis });
+  } catch (err) {
+    return corsJson({ error: 'Claude call failed', detail: String(err) }, 502);
+  }
+}
+
 export default {
   async fetch(request) {
     if (request.method === 'OPTIONS') {
@@ -48,7 +92,7 @@ export default {
     }
     const url = new URL(request.url);
     if (url.pathname === '/claude') {
-      return corsJson({ error: 'Not implemented yet' }, 501);
+      return handleClaude(request);
     }
     return proxySavvy(request, url);
   },
