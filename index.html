@@ -193,6 +193,17 @@
     .chat-msg.assistant .chat-role { color: var(--accent); }
     .chat-msg.user .chat-role { color: var(--text-secondary); }
     .chat-text { font-size: 13px; color: var(--text-primary); line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
+    .chat-text strong { color: var(--text-primary); font-weight: 700; }
+    .chat-text .verdict {
+      display: inline-block; font-size: 12px; font-weight: 800;
+      padding: 2px 10px; border-radius: 5px; letter-spacing: 0.05em;
+      vertical-align: 1px;
+    }
+    .verdict.buy   { background: var(--buy-bg);  color: var(--buy); }
+    .verdict.sell  { background: var(--sell-bg); color: var(--sell); }
+    .verdict.hold  { background: var(--accent-bg); color: var(--accent); }
+    .verdict.watch { background: var(--bg-feed); color: var(--text-secondary); border: 1px solid var(--border-strong); }
+    .verdict.skip  { background: var(--bg-feed); color: var(--text-muted); }
     .chat-msg.assistant.thinking .chat-text { color: var(--text-muted); font-style: italic; }
     .chat-input-row { display: flex; gap: 6px; padding: 10px; background: var(--bg-sidebar); border-top: 1px solid var(--border); }
     .chat-input {
@@ -991,6 +1002,19 @@
     }
   }
 
+  // Very small markdown renderer: only **bold**.
+  // Escape HTML first (so user/model text is safe), then bold inline.
+  function renderInline(text) {
+    return escapeHtml(text).replace(/\*\*([^*\n]+?)\*\*/g, '<strong>$1</strong>');
+  }
+  // Wrap the first "Recommendation:" line in a colored badge so it's scannable.
+  function highlightRecommendation(htmlText) {
+    return htmlText.replace(
+      /(<strong>Recommendation:<\/strong>)\s*(BUY|HOLD|SELL|WATCH|SKIP)\b/,
+      (_, label, verdict) => `${label} <span class="verdict ${verdict.toLowerCase()}">${verdict}</span>`
+    );
+  }
+
   function renderChatMessages(conversation) {
     // conversation is an array of {role, content}. The first user message is
     // the post payload (verbose, internal) — skip rendering it so the UI
@@ -1000,10 +1024,16 @@
       .map(m => {
         const cls = m.role === 'user' ? 'user' : 'assistant';
         const label = m.role === 'user' ? '? You' : '✦ Claude';
+        let content;
+        if (m.role === 'user') {
+          content = escapeHtml(m.content);
+        } else {
+          content = highlightRecommendation(renderInline(m.content));
+        }
         return `
           <div class="chat-msg ${cls}">
             <div class="chat-role">${label}</div>
-            <div class="chat-text">${escapeHtml(m.content)}</div>
+            <div class="chat-text">${content}</div>
           </div>
         `;
       })
