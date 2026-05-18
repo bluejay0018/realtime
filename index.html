@@ -158,8 +158,12 @@
     .pill.sell { background: var(--sell-bg); color: var(--sell); }
     .pill.comment { background: var(--comment-bg); color: var(--comment); }
     .trade-line { font-size: 12px; color: var(--text-secondary); margin-bottom: 8px; }
-    .ticker { font-weight: 700; color: var(--text-primary); text-decoration: none; border-bottom: 1px dashed var(--text-muted); }
-    .ticker:hover { color: var(--accent); border-bottom-color: var(--accent); }
+    .ticker { font-weight: 700; color: var(--accent); text-decoration: none; }
+    .ticker:hover { text-decoration: underline; }
+    .quote { font-weight: 600; padding: 2px 7px; border-radius: 4px; font-size: 11px; background: var(--bg-feed); color: var(--text-secondary); }
+    .quote.up   { background: var(--buy-bg);  color: var(--buy); }
+    .quote.down { background: var(--sell-bg); color: var(--sell); }
+    .quote.loading { color: var(--text-muted); font-style: italic; font-weight: 500; }
     .change.up { color: var(--buy); font-weight: 600; }
     .change.down { color: var(--sell); font-weight: 600; }
     .body-text { font-size: 13px; color: var(--text-primary); line-height: 1.65; white-space: pre-wrap; word-break: break-word; }
@@ -356,12 +360,14 @@
     portfolios: [],
     selectedPortfolios: new Set(),
     claudeCache: new Map(),
+    quoteCache: new Map(),  // symbol -> { price, fetchedAt }
     pollHandle: null,
     pollMs: 30000,
     initialCount: 20,
     newCount: 0,
     statusMode: 'idle',
   };
+  const QUOTE_TTL_MS = 60 * 1000;  // refetch quotes after 60s
 
   // ============================================================
   // STORAGE
@@ -514,6 +520,15 @@
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Claude error');
     return data.analysis;
+  }
+
+  async function fetchQuote(symbol) {
+    const { workerUrl } = getCreds();
+    if (!workerUrl) throw new Error('Worker URL not set');
+    const res = await fetch(workerUrl + '/quote/' + encodeURIComponent(symbol));
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || ('Quote error ' + res.status));
+    return data;
   }
 
   function buildPostText(post) {
@@ -790,6 +805,11 @@
         bits.push(`<span class="change ${up ? 'up' : 'down'}">${up ? '+' : ''}${escapeHtml(post.holdingPercentChange)}%</span>`);
       }
       if (post.holdingPercentAllocation != null) bits.push(`${escapeHtml(post.holdingPercentAllocation)}% alloc`);
+      if (post.symbol && post.pricePerShare != null) {
+        const sym = escapeHtml(post.symbol);
+        const buyPx = escapeHtml(post.pricePerShare);
+        bits.push(`<span class="quote loading" data-quote="${sym}" data-buy-price="${buyPx}">Now loading…</span>`);
+      }
       tradeLine = `<div class="trade-line">${bits.join(' · ')}</div>`;
     }
 
@@ -840,6 +860,63 @@
         if (btn) btn.style.display = 'none';
       }
     });
+    // Fill in live quotes (async, doesn't block render)
+    enrichQuotes();
+  }
+
+  function applyQuoteToCard(span, quote) {
+    const buyPrice = Number(span.dataset.buyPrice);
+    const price = Number(quote.price);
+    if (!isFinite(price)) {
+      span.classList.remove('loading', 'up', 'down');
+      span.textContent = 'Quote n/a';
+      return;
+    }
+    span.classList.remove('loading');
+    let label = 'Now $' + price.toFixed(2);
+    if (isFinite(buyPrice) && buyPrice > 0) {
+      const pct = ((price - buyPrice) / buyPrice) * 100;
+      const sign = pct >= 0 ? '+' : '';
+      span.classList.add(pct >= 0 ? 'up' : 'down');
+      label += ` (${sign}${pct.toFixed(1)}% since post)`;
+    }
+    span.textContent = label;
+  }
+
+  async function enrichQuotes() {
+    const spans = document.querySelectorAll('.quote[data-quote]');
+    if (spans.length === 0) return;
+
+    // Group spans by symbol so we make one request per unique symbol
+    const bySymbol = new Map();
+    for (const span of spans) {
+      const sym = span.dataset.quote;
+      if (!sym) continue;
+      if (!bySymbol.has(sym)) bySymbol.set(sym, []);
+      bySymbol.get(sym).push(span);
+    }
+
+    for (const [symbol, targets] of bySymbol) {
+      // Use cache if fresh
+      const cached = state.quoteCache.get(symbol);
+      if (cached && (Date.now() - cached.fetchedAt) < QUOTE_TTL_MS) {
+        targets.forEach(s => applyQuoteToCard(s, cached));
+        continue;
+      }
+      // Fetch (don't await — fire all in parallel, fill in as they arrive)
+      fetchQuote(symbol).then(quote => {
+        state.quoteCache.set(symbol, { ...quote, fetchedAt: Date.now() });
+        const fresh = document.querySelectorAll(`.quote[data-quote="${symbol}"]`);
+        fresh.forEach(s => applyQuoteToCard(s, quote));
+      }).catch(err => {
+        const fresh = document.querySelectorAll(`.quote[data-quote="${symbol}"]`);
+        fresh.forEach(s => {
+          s.classList.remove('loading');
+          s.textContent = 'Quote n/a';
+          s.title = err.message;
+        });
+      });
+    }
   }
 
   function renderChatMessages(conversation) {

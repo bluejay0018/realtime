@@ -103,6 +103,34 @@ async function handleClaude(request) {
   }
 }
 
+async function handleQuote(symbol) {
+  if (!symbol || !/^[A-Za-z0-9.\-]+$/.test(symbol)) {
+    return corsJson({ error: 'Invalid symbol' }, 400);
+  }
+  try {
+    const upstream = await fetch(
+      `https://query1.finance.yahoo.com/v8/finance/chart/${encodeURIComponent(symbol)}?range=1d&interval=1d`,
+      { headers: { 'User-Agent': 'Mozilla/5.0 (compatible; SavvyFeedBot/1.0)' } }
+    );
+    if (!upstream.ok) {
+      return corsJson({ error: 'Yahoo error', status: upstream.status }, upstream.status);
+    }
+    const data = await upstream.json();
+    const result = data?.chart?.result?.[0];
+    if (!result) return corsJson({ error: 'No data for ' + symbol }, 404);
+    const meta = result.meta || {};
+    return corsJson({
+      symbol: meta.symbol || symbol,
+      price: meta.regularMarketPrice ?? null,
+      currency: meta.currency ?? null,
+      previousClose: meta.chartPreviousClose ?? meta.previousClose ?? null,
+      marketState: meta.marketState ?? null,
+    });
+  } catch (err) {
+    return corsJson({ error: 'Quote fetch failed', detail: String(err) }, 502);
+  }
+}
+
 export default {
   async fetch(request) {
     if (request.method === 'OPTIONS') {
@@ -111,6 +139,10 @@ export default {
     const url = new URL(request.url);
     if (url.pathname === '/claude') {
       return handleClaude(request);
+    }
+    if (url.pathname.startsWith('/quote/')) {
+      const symbol = decodeURIComponent(url.pathname.slice('/quote/'.length));
+      return handleQuote(symbol);
     }
     return proxySavvy(request, url);
   },
