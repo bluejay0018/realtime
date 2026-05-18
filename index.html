@@ -286,8 +286,84 @@
   </main>
 
   <script>
-    // Filled in subsequent tasks
-    console.log('Savvy Trader Feed — loaded');
+  'use strict';
+
+  // ============================================================
+  // CONSTANTS & STATE
+  // ============================================================
+  const SETTINGS_KEY = 'savvy.settings.v1';
+  const THEME_KEY    = 'savvy.theme';
+
+  const state = {
+    posts: [],
+    seenIds: new Set(),
+    portfolios: [],
+    selectedPortfolios: new Set(),
+    claudeCache: new Map(),
+    pollHandle: null,
+    pollMs: 30000,
+    initialCount: 20,
+    newCount: 0,
+    statusMode: 'idle',
+  };
+
+  // ============================================================
+  // STORAGE
+  // ============================================================
+  function loadSettings() {
+    try {
+      const raw = localStorage.getItem(SETTINGS_KEY);
+      return raw ? JSON.parse(raw) : {};
+    } catch { return {}; }
+  }
+  function saveSettings(patch) {
+    const current = loadSettings();
+    const next = { ...current, ...patch };
+    localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+  }
+
+  // ============================================================
+  // THEME
+  // ============================================================
+  function applyTheme(theme) {
+    document.body.dataset.theme = theme;
+    document.getElementById('theme-toggle').textContent = theme === 'dark' ? '☀' : '☾';
+    localStorage.setItem(THEME_KEY, theme);
+  }
+  function initTheme() {
+    const saved = localStorage.getItem(THEME_KEY);
+    if (saved === 'dark' || saved === 'light') return applyTheme(saved);
+    const prefersDark = window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+    applyTheme(prefersDark ? 'dark' : 'light');
+  }
+  function toggleTheme() {
+    applyTheme(document.body.dataset.theme === 'dark' ? 'light' : 'dark');
+  }
+
+  // ============================================================
+  // INIT
+  // ============================================================
+  function init() {
+    initTheme();
+    document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+
+    // Restore auth fields
+    const s = loadSettings();
+    if (s.workerUrl)   document.getElementById('worker-url').value   = s.workerUrl;
+    if (s.jwtToken)    document.getElementById('jwt-token').value    = s.jwtToken;
+    if (s.anthropicKey)document.getElementById('anthropic-key').value= s.anthropicKey;
+    if (s.pollMs)      document.getElementById('poll-interval').value= String(s.pollMs);
+    if (s.initialCount)document.getElementById('initial-count').value= String(s.initialCount);
+
+    // Persist on change
+    document.getElementById('worker-url').addEventListener('change', e => saveSettings({ workerUrl: e.target.value.trim() }));
+    document.getElementById('jwt-token').addEventListener('change', e => saveSettings({ jwtToken: e.target.value.trim() }));
+    document.getElementById('anthropic-key').addEventListener('change', e => saveSettings({ anthropicKey: e.target.value.trim() }));
+    document.getElementById('poll-interval').addEventListener('change', e => saveSettings({ pollMs: Number(e.target.value) }));
+    document.getElementById('initial-count').addEventListener('change', e => saveSettings({ initialCount: Number(e.target.value) }));
+  }
+
+  document.addEventListener('DOMContentLoaded', init);
   </script>
 </body>
 </html>
