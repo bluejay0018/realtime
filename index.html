@@ -182,7 +182,7 @@
 </head>
 <body data-theme="light">
   <header>
-    <h1>Savvy Trader Feed</h1>
+    <h1>Today's View</h1>
     <div class="header-right">
       <div class="status" id="status">
         <span class="status-dot"></span>
@@ -293,6 +293,9 @@
   // ============================================================
   const SETTINGS_KEY = 'savvy.settings.v1';
   const THEME_KEY    = 'savvy.theme';
+  const POSTS_KEY    = 'savvy.posts.v1';
+  const CLAUDE_KEY   = 'savvy.claude.v1';
+  const MAX_STORED_POSTS = 500;
 
   const state = {
     posts: [],
@@ -320,6 +323,53 @@
     const current = loadSettings();
     const next = { ...current, ...patch };
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(next));
+  }
+
+  function persistPosts() {
+    try {
+      // Sort by orderDate desc and keep the most recent MAX_STORED_POSTS
+      const sorted = [...state.posts].sort((a, b) =>
+        new Date(b.orderDate || 0) - new Date(a.orderDate || 0)
+      ).slice(0, MAX_STORED_POSTS);
+      localStorage.setItem(POSTS_KEY, JSON.stringify(sorted));
+    } catch (err) {
+      console.warn('Failed to persist posts:', err);
+    }
+  }
+  function persistClaude() {
+    try {
+      const entries = Array.from(state.claudeCache.entries());
+      localStorage.setItem(CLAUDE_KEY, JSON.stringify(entries));
+    } catch (err) {
+      console.warn('Failed to persist Claude cache:', err);
+    }
+  }
+  function loadStoredPosts() {
+    try {
+      const raw = localStorage.getItem(POSTS_KEY);
+      if (!raw) return;
+      const stored = JSON.parse(raw);
+      if (!Array.isArray(stored)) return;
+      for (const post of stored) {
+        if (post && post.id != null && !state.seenIds.has(post.id)) {
+          state.seenIds.add(post.id);
+          state.posts.push(post);
+        }
+      }
+    } catch (err) {
+      console.warn('Failed to load stored posts:', err);
+    }
+  }
+  function loadStoredClaude() {
+    try {
+      const raw = localStorage.getItem(CLAUDE_KEY);
+      if (!raw) return;
+      const entries = JSON.parse(raw);
+      if (!Array.isArray(entries)) return;
+      state.claudeCache = new Map(entries);
+    } catch (err) {
+      console.warn('Failed to load stored Claude cache:', err);
+    }
   }
 
   // ============================================================
@@ -492,6 +542,8 @@
     state.seenIds.clear();
     state.claudeCache.clear();
     state.newCount = 0;
+    localStorage.removeItem(POSTS_KEY);
+    localStorage.removeItem(CLAUDE_KEY);
     renderFeed();
     updateCounts();
     setStatus('idle', 'Idle');
@@ -563,6 +615,7 @@
       state.newCount += added;
       updateNewPill();
     }
+    persistPosts();
     updateCounts();
     renderFeed();
   }
@@ -741,6 +794,7 @@
     try {
       const analysis = await fetchClaude(buildPostText(post));
       state.claudeCache.set(postId, analysis);
+      persistClaude();
       container.innerHTML = renderAnalysis(analysis, false);
     } catch (err) {
       container.innerHTML = renderAnalysis('Claude error: ' + err.message + ' — click again to retry.', true);
@@ -756,6 +810,10 @@
   function init() {
     initTheme();
     document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
+
+    // Restore stored posts + Claude cache
+    loadStoredPosts();
+    loadStoredClaude();
 
     // Restore auth fields
     const s = loadSettings();
@@ -792,6 +850,12 @@
       if (!btn) return;
       handleAnalyzeClick(Number(btn.dataset.analyze));
     });
+
+    // Render anything we restored from localStorage
+    if (state.posts.length > 0) {
+      updateCounts();
+      renderFeed();
+    }
 
     setStatus('idle', 'Idle');
   }
