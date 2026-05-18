@@ -720,6 +720,37 @@
   }
 
   // ============================================================
+  // CLAUDE ANALYSIS
+  // ============================================================
+  async function handleAnalyzeClick(postId) {
+    const post = state.posts.find(p => p.id === postId);
+    if (!post) return;
+    const container = document.querySelector(`[data-analysis="${postId}"]`);
+    const btn       = document.querySelector(`[data-analyze="${postId}"]`);
+
+    // Cache hit
+    if (state.claudeCache.has(postId)) {
+      container.innerHTML = renderAnalysis(state.claudeCache.get(postId), false);
+      return;
+    }
+
+    btn.disabled = true;
+    btn.textContent = '✦ Analyzing...';
+    container.innerHTML = '';
+
+    try {
+      const analysis = await fetchClaude(buildPostText(post));
+      state.claudeCache.set(postId, analysis);
+      container.innerHTML = renderAnalysis(analysis, false);
+    } catch (err) {
+      container.innerHTML = renderAnalysis('Claude error: ' + err.message + ' — click again to retry.', true);
+    } finally {
+      btn.disabled = false;
+      btn.textContent = '✦ Ask Claude';
+    }
+  }
+
+  // ============================================================
   // INIT
   // ============================================================
   function init() {
@@ -755,6 +786,12 @@
     document.getElementById('sort-order').addEventListener('change', renderFeed);
     document.getElementById('feed').addEventListener('scroll', clearNewBadge);
     document.getElementById('feed').addEventListener('click', clearNewBadge);
+
+    document.getElementById('feed').addEventListener('click', e => {
+      const btn = e.target.closest('[data-analyze]');
+      if (!btn) return;
+      handleAnalyzeClick(Number(btn.dataset.analyze));
+    });
 
     setStatus('idle', 'Idle');
   }
