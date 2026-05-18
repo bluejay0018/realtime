@@ -291,11 +291,37 @@
   // ============================================================
   // CONSTANTS & STATE
   // ============================================================
-  const SETTINGS_KEY = 'savvy.settings.v1';
-  const THEME_KEY    = 'savvy.theme';
-  const POSTS_KEY    = 'savvy.posts.v1';
-  const CLAUDE_KEY   = 'savvy.claude.v1';
+  const SETTINGS_KEY  = 'savvy.settings.v1';
+  const THEME_KEY     = 'savvy.theme';
+  const POSTS_KEY     = 'savvy.posts.v1';
+  const CLAUDE_KEY    = 'savvy.claude.v1';
+  const SELECTED_KEY  = 'savvy.selectedPortfolios.v1';
   const MAX_STORED_POSTS = 500;
+
+  // Portfolio allowlist + display-name overrides.
+  // Source name (from Savvy Trader API) → display name shown in app.
+  const PORTFOLIO_RENAMES = {
+    "My Full Portfolio": "Hamid Portfolio",
+    "Risk v. Reward":    "Dustins Risk v. Reward",
+  };
+  // Final display names that are allowed. A post/portfolio is kept iff its
+  // post-rename name appears here.
+  const PORTFOLIO_DISPLAY_NAMES = new Set([
+    "Shay's Growth Portfolio",
+    "Shay's Family Portfolio",
+    "Eggs in One Basket",
+    "Hamid Portfolio",
+    "10X by 2030",
+    "Dustins Risk v. Reward",
+  ]);
+
+  function displayName(name) {
+    if (name == null) return name;
+    return PORTFOLIO_RENAMES[name] || name;
+  }
+  function isAllowedPortfolio(name) {
+    return PORTFOLIO_DISPLAY_NAMES.has(displayName(name));
+  }
 
   const state = {
     posts: [],
@@ -351,15 +377,36 @@
       const stored = JSON.parse(raw);
       if (!Array.isArray(stored)) return;
       for (const post of stored) {
-        if (post && post.id != null && !state.seenIds.has(post.id)) {
-          state.seenIds.add(post.id);
-          state.posts.push(post);
-        }
+        if (!post || post.id == null) continue;
+        if (state.seenIds.has(post.id)) continue;
+        if (post.portfolio?.name && !isAllowedPortfolio(post.portfolio.name)) continue;
+        if (post.portfolio?.name) post.portfolio.name = displayName(post.portfolio.name);
+        state.seenIds.add(post.id);
+        state.posts.push(post);
       }
     } catch (err) {
       console.warn('Failed to load stored posts:', err);
     }
   }
+  function persistSelectedPortfolios() {
+    try {
+      localStorage.setItem(SELECTED_KEY, JSON.stringify(Array.from(state.selectedPortfolios)));
+    } catch (err) {
+      console.warn('Failed to persist portfolio selection:', err);
+    }
+  }
+  function loadStoredSelectedPortfolios() {
+    try {
+      const raw = localStorage.getItem(SELECTED_KEY);
+      if (!raw) return;
+      const ids = JSON.parse(raw);
+      if (!Array.isArray(ids)) return;
+      state.selectedPortfolios = new Set(ids);
+    } catch (err) {
+      console.warn('Failed to load stored portfolio selection:', err);
+    }
+  }
+
   function loadStoredClaude() {
     try {
       const raw = localStorage.getItem(CLAUDE_KEY);
@@ -544,6 +591,8 @@
     state.newCount = 0;
     localStorage.removeItem(POSTS_KEY);
     localStorage.removeItem(CLAUDE_KEY);
+    localStorage.removeItem(SELECTED_KEY);
+    state.selectedPortfolios.clear();
     renderFeed();
     updateCounts();
     setStatus('idle', 'Idle');
@@ -554,10 +603,22 @@
   // PORTFOLIOS
   // ============================================================
   function ingestPortfolios(list) {
-    state.portfolios = Array.isArray(list) ? list : [];
-    // First load: select all by default. Subsequent loads: preserve selection.
+    const raw = Array.isArray(list) ? list : [];
+    state.portfolios = raw
+      .filter(p => isAllowedPortfolio(p?.name))
+      .map(p => ({ ...p, name: displayName(p.name) }));
+
+    // First load: select all by default. Subsequent loads: preserve selection
+    // (restored from localStorage in init()).
     if (state.selectedPortfolios.size === 0) {
       state.portfolios.forEach(p => state.selectedPortfolios.add(p.id));
+      persistSelectedPortfolios();
+    } else {
+      // Drop any stored selections that are no longer in the allowed list
+      const allowedIds = new Set(state.portfolios.map(p => p.id));
+      for (const id of Array.from(state.selectedPortfolios)) {
+        if (!allowedIds.has(id)) state.selectedPortfolios.delete(id);
+      }
     }
     renderPortfolios();
   }
@@ -581,6 +642,7 @@
         const id = Number(e.target.dataset.pf);
         if (e.target.checked) state.selectedPortfolios.add(id);
         else state.selectedPortfolios.delete(id);
+        persistSelectedPortfolios();
         renderFeed();
       });
     });
@@ -588,6 +650,7 @@
   function selectAllPortfolios(selected) {
     state.selectedPortfolios.clear();
     if (selected) state.portfolios.forEach(p => state.selectedPortfolios.add(p.id));
+    persistSelectedPortfolios();
     renderPortfolios();
     renderFeed();
   }
@@ -607,6 +670,10 @@
     for (const post of list) {
       if (!post || post.id == null) continue;
       if (state.seenIds.has(post.id)) continue;
+      // Filter by portfolio allowlist (based on post.portfolio.name)
+      if (post.portfolio?.name && !isAllowedPortfolio(post.portfolio.name)) continue;
+      // Apply rename so it shows up in cards and search
+      if (post.portfolio?.name) post.portfolio.name = displayName(post.portfolio.name);
       state.seenIds.add(post.id);
       state.posts.push(post);
       if (!initial) added++;
@@ -811,7 +878,8 @@
     initTheme();
     document.getElementById('theme-toggle').addEventListener('click', toggleTheme);
 
-    // Restore stored posts + Claude cache
+    // Restore stored posts, Claude cache, and portfolio selection
+    loadStoredSelectedPortfolios();
     loadStoredPosts();
     loadStoredClaude();
 
