@@ -3,3 +3,4 @@ node_modules/
 .dev.vars
 .superpowers/
 .DS_Store
+README.md
