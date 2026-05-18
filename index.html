@@ -546,10 +546,178 @@
     }[c]));
   }
 
-  // Placeholders implemented in Task 10:
-  function ingestPosts(_list, _initial) {}
-  function renderFeed() {}
-  function updateCounts() {}
+  // ============================================================
+  // POSTS — ingest + render
+  // ============================================================
+  function ingestPosts(list, initial) {
+    if (!Array.isArray(list)) return;
+    let added = 0;
+    for (const post of list) {
+      if (!post || post.id == null) continue;
+      if (state.seenIds.has(post.id)) continue;
+      state.seenIds.add(post.id);
+      state.posts.push(post);
+      if (!initial) added++;
+    }
+    if (!initial && added > 0) {
+      state.newCount += added;
+      updateNewPill();
+    }
+    updateCounts();
+    renderFeed();
+  }
+
+  function getFilteredPosts() {
+    const showComment = document.getElementById('filter-comment').checked;
+    const showBuy     = document.getElementById('filter-buy').checked;
+    const showSell    = document.getElementById('filter-sell').checked;
+    const search      = document.getElementById('search').value.trim().toLowerCase();
+    const sort        = document.getElementById('sort-order').value;
+
+    const typeAllowed = t => (t === 'comment' && showComment) || (t === 'buy' && showBuy) || (t === 'sell' && showSell);
+
+    const filtered = state.posts.filter(p => {
+      if (!typeAllowed(p.transactionType)) return false;
+      if (p.portfolioId != null && state.selectedPortfolios.size > 0 && !state.selectedPortfolios.has(p.portfolioId)) return false;
+      if (search) {
+        const haystack = [
+          p.symbol, p.comment, p.portfolio?.name,
+        ].filter(Boolean).join(' ').toLowerCase();
+        if (!haystack.includes(search)) return false;
+      }
+      return true;
+    });
+
+    filtered.sort((a, b) => {
+      const da = new Date(a.orderDate || 0).getTime();
+      const db = new Date(b.orderDate || 0).getTime();
+      return sort === 'asc' ? da - db : db - da;
+    });
+
+    return filtered;
+  }
+
+  function relativeTime(iso) {
+    if (!iso) return '';
+    const then = new Date(iso).getTime();
+    const diff = Date.now() - then;
+    const s = Math.floor(diff / 1000);
+    if (s < 60)   return s + 's ago';
+    const m = Math.floor(s / 60);
+    if (m < 60)   return m + 'm ago';
+    const h = Math.floor(m / 60);
+    if (h < 24)   return h + 'h ago';
+    const d = Math.floor(h / 24);
+    if (d < 7)    return d + 'd ago';
+    return new Date(iso).toLocaleDateString();
+  }
+
+  function pillLabel(post) {
+    if (post.transactionType === 'buy')  return 'Added position';
+    if (post.transactionType === 'sell') {
+      return (post.holdingPercentAllocation === 0) ? 'Exited position' : 'Trimmed position';
+    }
+    return 'Commentary';
+  }
+
+  function renderCard(post) {
+    const t = post.transactionType || 'comment';
+    const pname = post.portfolio?.name || '#' + (post.portfolioId ?? '?');
+    const initial = (pname[0] || '?').toUpperCase();
+    const time = relativeTime(post.orderDate);
+
+    let tradeLine = '';
+    if (t === 'buy' || t === 'sell') {
+      const bits = [];
+      if (post.symbol) bits.push(`<span class="ticker">${escapeHtml(post.symbol)}</span>`);
+      if (post.quantity != null && post.pricePerShare != null)
+        bits.push(`${escapeHtml(post.quantity)} shares @ $${escapeHtml(post.pricePerShare)}`);
+      if (post.holdingPercentChange != null) {
+        const up = Number(post.holdingPercentChange) >= 0;
+        bits.push(`<span class="change ${up ? 'up' : 'down'}">${up ? '+' : ''}${escapeHtml(post.holdingPercentChange)}%</span>`);
+      }
+      if (post.holdingPercentAllocation != null) bits.push(`${escapeHtml(post.holdingPercentAllocation)}% alloc`);
+      tradeLine = `<div class="trade-line">${bits.join(' · ')}</div>`;
+    }
+
+    const images = (post.images || [])
+      .filter(img => img && img.url)
+      .map(img => `<img class="post-image" src="${escapeHtml(img.url)}" alt="">`)
+      .join('');
+
+    return `
+      <div class="card" data-id="${post.id}">
+        <div class="card-head">
+          <div class="avatar">${escapeHtml(initial)}</div>
+          <div style="flex:1">
+            <div class="portfolio-name">${escapeHtml(pname)}</div>
+            <div class="timestamp">${escapeHtml(time)}</div>
+          </div>
+          <span class="pill ${t}">${escapeHtml(pillLabel(post))}</span>
+        </div>
+        ${tradeLine}
+        ${post.comment ? `<div class="body-text">${escapeHtml(post.comment)}</div>` : ''}
+        ${images}
+        <div class="card-actions">
+          <button class="analyze-btn" data-analyze="${post.id}">✦ Ask Claude</button>
+        </div>
+        <div class="analysis-container" data-analysis="${post.id}"></div>
+      </div>
+    `;
+  }
+
+  function renderFeed() {
+    const feed = document.getElementById('feed');
+    const posts = getFilteredPosts();
+    if (posts.length === 0) {
+      feed.innerHTML = `<div class="empty">${
+        state.posts.length === 0
+          ? 'Fill in credentials and click Start to load the feed.'
+          : 'No posts match the current filters.'
+      }</div>`;
+      return;
+    }
+    feed.innerHTML = posts.map(renderCard).join('');
+    // Re-attach cached Claude results
+    state.claudeCache.forEach((analysis, id) => {
+      const container = feed.querySelector(`[data-analysis="${id}"]`);
+      if (container) container.innerHTML = renderAnalysis(analysis, false);
+    });
+  }
+
+  function renderAnalysis(text, isError) {
+    return `<div class="analysis ${isError ? 'error' : ''}">
+      <div class="analysis-label">${isError ? 'Error' : 'Claude analysis'}</div>
+      ${escapeHtml(text)}
+    </div>`;
+  }
+
+  function updateCounts() {
+    let comment = 0, buy = 0, sell = 0;
+    for (const p of state.posts) {
+      if (p.transactionType === 'comment') comment++;
+      else if (p.transactionType === 'buy') buy++;
+      else if (p.transactionType === 'sell') sell++;
+    }
+    document.getElementById('count-comment').textContent = comment;
+    document.getElementById('count-buy').textContent = buy;
+    document.getElementById('count-sell').textContent = sell;
+    document.getElementById('total-count').textContent = state.posts.length + ' posts';
+  }
+
+  function updateNewPill() {
+    const pill = document.getElementById('new-pill');
+    if (state.newCount > 0) {
+      pill.textContent = '+' + state.newCount + ' new';
+      pill.classList.add('show');
+    } else {
+      pill.classList.remove('show');
+    }
+  }
+  function clearNewBadge() {
+    state.newCount = 0;
+    updateNewPill();
+  }
 
   // ============================================================
   // INIT
@@ -579,6 +747,14 @@
 
     document.getElementById('portfolios-all').addEventListener('click',  () => selectAllPortfolios(true));
     document.getElementById('portfolios-none').addEventListener('click', () => selectAllPortfolios(false));
+
+    document.getElementById('filter-comment').addEventListener('change', renderFeed);
+    document.getElementById('filter-buy').addEventListener('change', renderFeed);
+    document.getElementById('filter-sell').addEventListener('change', renderFeed);
+    document.getElementById('search').addEventListener('input', renderFeed);
+    document.getElementById('sort-order').addEventListener('change', renderFeed);
+    document.getElementById('feed').addEventListener('scroll', clearNewBadge);
+    document.getElementById('feed').addEventListener('click', clearNewBadge);
 
     setStatus('idle', 'Idle');
   }
